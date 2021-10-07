@@ -6,7 +6,7 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE,set.seed(46))
+knitr::opts_chunk$set(echo = TRUE,set.seed(1))
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
@@ -16,6 +16,7 @@ if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.
 if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
 if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
 if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
+if(!require(Amelia)) install.packages("Amelia", repos = "http://cran.us.r-project.org")
 
 library(tidyverse)
 library(caret)
@@ -26,6 +27,7 @@ library(data.table)
 library(dplyr)
 library(ggplot2)
 library(janitor)
+library(Amelia)
 ```
 
 #Claims Classification Report
@@ -55,8 +57,18 @@ claims_df %>%
   janitor::get_dupes()
 
 claims_df[!complete.cases(claims_df), ]
+
+Amelia::missmap(claims_df)
 ```
 No duplicates but have NA values in CREDIT_SCORE and ANNUAL_MILAGE. Will fix these in Numerical investigation section.
+
+```{r}
+ggplot(gather(claims_df), aes(value)) + 
+    geom_histogram(stat = "count") + 
+    facet_wrap(~key, scales = 'free_x')
+```
+
+
 
 ### Investigate Spread of Target Variable
 
@@ -285,7 +297,7 @@ text(fit_ct$finalModel, cex = 0.75)
 
 Random forest
 ```{r Random_forest}
-mtry_grid = data.frame(mtry = seq(4:10))
+mtry_grid = data.frame(mtry = seq(1,7,2))
 fit_rf <- caret::train(OUTCOME ~ ., 
                        data = train,
                        method='rf',
@@ -301,17 +313,234 @@ confusionMatrix(y_hat,test$OUTCOME)
 imp <- varImp(fit_rf)
 imp
 ```
-
 ```{r}
-library(LiblineaR)
-fit_svm<- caret::train(OUTCOME ~ .,
+md_grid <- data.frame(maxdepth=seq(1, 12, 1))
+fit_rf2 <- caret::train(OUTCOME ~ .,
                        data = train,
-                 method = "svmLinear3")
+                       method="rpart2",
+                       tuneGrid = md_grid)
 
-y_hat <- predict(fit_svm,test)
-
-confusionMatrix(y_hat,test$OUTCOME)
+y_hat <- predict(fit_rf2,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+plot(fit_rf2)
 ```
 
+```{r treebag}
+fit_tb <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="treebag")
+
+y_hat <- predict(fit_tb,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+
+##Model Summaries
+```{r}
+models <- c("GLM", "LDA", "QDA", "kNN","Classification Tree", "Random forest", "Classifcation Tree 2","Treebag","LDA 2")
+accuracy <- c(confusionMatrix(predict(fit_glm, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_lda, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_qda, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_knn, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_ct, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_rf, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_rf2, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_tb, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_lda2, test), test$OUTCOME)$overall["Accuracy"]
+              )
+data.frame(Model = models, Accuracy = accuracy) %>% arrange(desc(Accuracy))
+```
+
+
+##Ensemable
+```{r}
+# y_models <-
+#  bind_cols(
+#   y_glm = predict(fit_glm,test),
+#   y_lda = predict(fit_lda,test),
+#   y_qda = predict(fit_qda,test),
+#   y_ct = predict(fit_ct,test),
+#   y_rf = predict(fit_rf,test)
+# )
+
+y_models <-
+ bind_cols(
+  y_glm = predict(fit_glm,test),
+  y_c4.5 =predict(fit_c4.5,test),
+  y_c5 =predict(fit_c5,test),
+  y_rf =predict(fit_rf,test),
+  y_ct =predict(fit_ct,test),
+  y_tb =predict(fit_tb,test)
+)
+
+ensamble_pred <-
+  y_models %>%
+  mutate_all(as.numeric) %>%
+  rowMeans()
+
+ensamble_pred <-
+  ifelse(ensamble_pred > 1.5, 1,0)
+
+confusionMatrix(factor(ensamble_pred),test$OUTCOME)
+```
+
+
+##Over-sampling
+Can over-sampling combat the imbalance:
+```{r}
+train2 <-
+  train %>%
+  bind_rows(train %>%
+  filter(OUTCOME==1))
+
+prop.table(table(train2$OUTCOME))
+```
+
+#Impact on previous models
+```{r}
+cp_grid <- data.frame(cp=seq(0, 0.05, 0.002))
+fit <- caret::train(OUTCOME ~ .,
+                       data = train2,
+                       method="rpart",
+                       tuneGrid = cp_grid)
+
+plot(fit)
+
+y_hat <- predict(fit,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+##Under-sampling test
+
+```{r}
+id_list <- 
+  c(which(train$OUTCOME=="0")[1:length(which(train$OUTCOME=="1"))],which(train$OUTCOME=="1"))
+
+train3 <-
+  train[id_list,]
+prop.table(table(train3$OUTCOME))
+```
+
+
+```{r}
+mtry_grid = data.frame(mtry = seq(4:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train3,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train3,
+                       method='J48'
+                    )
+
+
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+
+```{r}
+fit_c4.5 <- caret::train(OUTCOME ~ .,
+                    data = train,
+                    method='J48')
+fit
+y_hat <- predict(fit_c4.5,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r}
+fit_c5 <- caret::train(OUTCOME ~ .,
+                    data = train,
+                    method='C5.0')
+fit_c5
+y_hat <- predict(fit_c5,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r}
+fit <- caret::train(OUTCOME ~ .,
+                    data = train,
+                    method='xgbDART')
+fit
+y_hat <- predict(fit,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+## Feature Reduction
+
+```{r}
+train %>% 
+  ggplot(aes(INCOME,fill=OUTCOME)) +
+  geom_bar(position = "dodge")
+```
+
+
+```{r}
+train4 <- train %>%
+  select(-ID,-INCOME,-EDUCATION)
+
+train4 %>% head()
+```
+
+```{r}
+mtry_grid = data.frame(mtry = seq(1:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train4,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r}
+train5 <-
+  train %>%
+  filter(
+    ANNUAL_MILEAGE <=18000 &
+      ANNUAL_MILEAGE >5000 &
+      SPEEDING_VIOLATIONS <=15 &
+      DUIS <=5 &
+      PAST_ACCIDENTS <=10
+  ) %>%
+  select(-ID,-INCOME,-EDUCATION)
+train5 %>% head()
+```
+
+```{r}
+fit <-
+  caret::train(
+    OUTCOME ~.,
+    data=train5,
+    method="glm"
+  )
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+```{r}
+mtry_grid = data.frame(mtry = seq(1:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train5,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+
+```
 
 
