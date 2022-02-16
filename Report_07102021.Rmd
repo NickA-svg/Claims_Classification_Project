@@ -1,0 +1,545 @@
+---
+title: "Report"
+author: "Nick Aristidou"
+date: "05/10/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,set.seed(1))
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
+if(!require(Amelia)) install.packages("Amelia", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(Amelia)
+```
+
+#Claims Classification Report
+
+## Aim use machine learning to classify if a policy will have a claim (1) or not (0)
+Data has been obtained from kaggle: "https://www.kaggle.com/sagnik1511/car-insurance-data"
+
+## Abstract
+
+## Exploratory Data Analysis
+
+```{r load_data}
+claims_df <- read.csv("data/Car_Insurance_Claim.csv")
+```
+
+```{r inspect_data}
+claims_df %>% head()
+```
+
+```{r inspect_columns}
+str(claims_df)
+```
+
+Check for duplicates and NA's:
+```{r data_check}
+claims_df %>%
+  janitor::get_dupes()
+
+claims_df[!complete.cases(claims_df), ]
+
+Amelia::missmap(claims_df)
+```
+No duplicates but have NA values in CREDIT_SCORE and ANNUAL_MILAGE. Will fix these in Numerical investigation section.
+
+```{r}
+ggplot(gather(claims_df), aes(value)) + 
+    geom_histogram(stat = "count") + 
+    facet_wrap(~key, scales = 'free_x')
+```
+
+
+
+### Investigate Spread of Target Variable
+
+Target variable is outcome:
+```{r check_target_var_distribution}
+prop.table(table(claims_df$OUTCOME))
+```
+
+Data is imbalanced to favour policies with no claim. This may lead to our models favouring no claim when implementing machine learning on this data set.
+In turn this may causes issues when trying to evaluate the success of the models using accuracy.
+Almost 70% of the policies have not had a claim.
+
+```{r chart_target_var}
+claims_df %>%
+  mutate(OUTCOME=as.factor(OUTCOME)) %>%
+  ggplot(aes(OUTCOME)) +
+  geom_bar(aes(fill=OUTCOME)) +
+  ylab("Count of Policies") +
+  xlab("Claim Outcome")
+```
+
+Fix data so that target variable is factor:
+```{r set_TV_factor}
+claims_df <-
+  claims_df %>% 
+  mutate(OUTCOME=as.factor(OUTCOME))
+```
+
+
+### Explore Numerical Features
+```{r numerical_features_tbl}
+claims_df %>% 
+  select_if(is.numeric) %>%
+  head()
+```
+
+```{r credit_score}
+claims_df %>% 
+  ggplot(aes(CREDIT_SCORE,colour=OUTCOME,fill=OUTCOME)) +
+  geom_density(alpha=0.5) +
+  xlab("Credit Score") +
+  ylab("Density")
+```
+We also observe that CREDIT_SCORE is related to the INCOME field and will use this to help fill in NAs
+
+```{r}
+claims_df %>% 
+  ggplot(aes(CREDIT_SCORE,colour=INCOME,fill=INCOME)) +
+  geom_density(alpha=0.5) +
+  xlab("Credit Score") +
+  ylab("Density")
+```
+
+
+
+```{r fixing_Credit_score}
+for (i in unique(claims_df$INCOME)) {
+  mu <- claims_df %>%
+    filter(INCOME == i) %>%
+    pull(CREDIT_SCORE) %>%
+    mean(.,na.rm=T)
+  
+  claims_df$CREDIT_SCORE[is.na(claims_df$CREDIT_SCORE) & claims_df$INCOME == i] <- mu
+}
+```
+
+
+Investigate ANNUAL_MILEAGE
+```{r annual_mileage}
+claims_df %>% 
+  ggplot(aes(ANNUAL_MILEAGE,colour=OUTCOME,fill=OUTCOME)) +
+  geom_density(alpha=0.5) +
+  xlab("Annual Mileage") +
+  ylab("Density")
+```
+It is noted that the ANNUAL_MILEAGE variable shows little to no correlation with other variables in the data set and therefore, for simplicity and to retain as much data as possible the NA values will be replaced with the overall average of the data. 
+```{r fixing_annual_mileage_na}
+claims_df %>% 
+  ggplot(aes(ANNUAL_MILEAGE,colour=GENDER,fill=GENDER)) +
+  geom_density(alpha=0.5) +
+  xlab("Annual Mileage") +
+  ylab("Density")
+```
+
+
+```{r fixing_annual_mileage_na_2}
+mu <-
+  claims_df %>%
+  pull(ANNUAL_MILEAGE) %>% mean(.,na.rm=T)
+
+claims_df$ANNUAL_MILEAGE[is.na(claims_df$ANNUAL_MILEAGE)] <- mu
+```
+
+
+All other values that have been set as numeric appear to be factors and will be explored with Categorical Variables
+```{r Vehicle_type}
+claims_df %>%
+  ggplot(aes(VEHICLE_TYPE,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Vehicle Type")
+```
+
+
+
+```{r AGE}
+claims_df %>%
+  ggplot(aes(AGE,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Age Group")
+```
+
+```{r Gender}
+claims_df %>%
+  ggplot(aes(GENDER,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Gender")
+```
+
+```{r RACE}
+claims_df %>%
+  ggplot(aes(RACE,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Race")
+```
+
+```{r DRIVING_EXP}
+claims_df %>%
+  ggplot(aes(DRIVING_EXPERIENCE,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Experience")
+```
+
+```{r Education}
+claims_df %>%
+  ggplot(aes(EDUCATION,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Education")
+```
+
+```{r INCOME}
+claims_df %>%
+  ggplot(aes(INCOME,fill=OUTCOME))+
+  geom_bar(position = 'dodge') +
+  ylab("Count of Policies") +
+  xlab("Income")
+```
+
+
+
+#Modelling
+##Create test and train data
+
+```{r test_train}
+test_index <- createDataPartition(y = claims_df$OUTCOME, times = 1, p = 0.2, list = FALSE)
+train <- claims_df[-test_index,]
+test <- claims_df[test_index,]
+```
+
+```{r dim_check_train}
+dim(train)
+```
+
+Logistic Regression
+```{r glm}
+fit_glm <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="glm")
+
+y_hat <- predict(fit_glm,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r LDA}
+fit_lda <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="lda")
+
+y_hat <- predict(fit_lda,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+QDA
+```{r qda}
+fit_qda <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="qda")
+
+y_hat <- predict(fit_qda,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+
+```{r knn}
+fit_knn <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="knn",
+               tuneGrid=data.frame(k=seq(25,100,2)),
+               trControl = trainControl(method = "cv", number = 10))
+
+y_hat <- predict(fit_knn,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+plot(fit_knn)
+```
+
+```{r classification_tree}
+cp_grid <- data.frame(cp=seq(0, 0.05, 0.002))
+fit_ct <- caret::train(OUTCOME ~ .,
+                       data = train,
+                       method="rpart",
+                       tuneGrid = cp_grid)
+fit_ct$results
+
+plot(fit_ct)
+
+cp_grid[which.max(fit_ct$results$Accuracy),]
+
+y_hat <- predict(fit_ct,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+
+plot(fit_ct$finalModel, margin = 0.1)
+text(fit_ct$finalModel, cex = 0.75)
+```
+
+
+Random forest
+```{r Random_forest}
+mtry_grid = data.frame(mtry = seq(1,7,2))
+fit_rf <- caret::train(OUTCOME ~ ., 
+                       data = train,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+fit_rf$results
+plot(fit_rf)
+
+y_hat <- predict(fit_rf,test)
+
+confusionMatrix(y_hat,test$OUTCOME)
+
+imp <- varImp(fit_rf)
+imp
+```
+```{r}
+md_grid <- data.frame(maxdepth=seq(1, 12, 1))
+fit_rf2 <- caret::train(OUTCOME ~ .,
+                       data = train,
+                       method="rpart2",
+                       tuneGrid = md_grid)
+
+y_hat <- predict(fit_rf2,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+plot(fit_rf2)
+```
+
+```{r treebag}
+fit_tb <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method="treebag")
+
+y_hat <- predict(fit_tb,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+
+##Model Summaries
+```{r}
+models <- c("GLM", "LDA", "QDA", "kNN","Classification Tree", "Random forest", "Classifcation Tree 2","Treebag","LDA 2")
+accuracy <- c(confusionMatrix(predict(fit_glm, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_lda, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_qda, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_knn, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_ct, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_rf, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_rf2, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_tb, test), test$OUTCOME)$overall["Accuracy"],
+              confusionMatrix(predict(fit_lda2, test), test$OUTCOME)$overall["Accuracy"]
+              )
+data.frame(Model = models, Accuracy = accuracy) %>% arrange(desc(Accuracy))
+```
+
+
+##Ensemable
+```{r}
+# y_models <-
+#  bind_cols(
+#   y_glm = predict(fit_glm,test),
+#   y_lda = predict(fit_lda,test),
+#   y_qda = predict(fit_qda,test),
+#   y_ct = predict(fit_ct,test),
+#   y_rf = predict(fit_rf,test)
+# )
+
+y_models <-
+ bind_cols(
+  y_glm = predict(fit_glm,test),
+  y_c4.5 =predict(fit_c4.5,test),
+  y_c5 =predict(fit_c5,test),
+  y_rf =predict(fit_rf,test),
+  y_ct =predict(fit_ct,test),
+  y_tb =predict(fit_tb,test)
+)
+
+ensamble_pred <-
+  y_models %>%
+  mutate_all(as.numeric) %>%
+  rowMeans()
+
+ensamble_pred <-
+  ifelse(ensamble_pred > 1.5, 1,0)
+
+confusionMatrix(factor(ensamble_pred),test$OUTCOME)
+```
+
+
+##Over-sampling
+Can over-sampling combat the imbalance:
+```{r}
+train2 <-
+  train %>%
+  bind_rows(train %>%
+  filter(OUTCOME==1))
+
+prop.table(table(train2$OUTCOME))
+```
+
+#Impact on previous models
+```{r}
+cp_grid <- data.frame(cp=seq(0, 0.05, 0.002))
+fit <- caret::train(OUTCOME ~ .,
+                       data = train2,
+                       method="rpart",
+                       tuneGrid = cp_grid)
+
+plot(fit)
+
+y_hat <- predict(fit,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+##Under-sampling test
+
+```{r}
+id_list <- 
+  c(which(train$OUTCOME=="0")[1:length(which(train$OUTCOME=="1"))],which(train$OUTCOME=="1"))
+
+train3 <-
+  train[id_list,]
+prop.table(table(train3$OUTCOME))
+```
+
+
+```{r}
+mtry_grid = data.frame(mtry = seq(4:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train3,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train3,
+                       method='J48'
+                    )
+
+
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+
+```{r}
+fit_c4.5 <- caret::train(OUTCOME ~ .,
+                    data = train,
+                    method='J48')
+fit
+y_hat <- predict(fit_c4.5,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r}
+fit_c5 <- caret::train(OUTCOME ~ .,
+                    data = train,
+                    method='C5.0')
+fit_c5
+y_hat <- predict(fit_c5,test)
+
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+## Feature Reduction
+```{r}
+train %>% 
+  ggplot(aes(INCOME,fill=OUTCOME)) +
+  geom_bar(position = "dodge")
+```
+
+
+```{r}
+train4 <- train %>%
+  select(-ID,-INCOME,-EDUCATION)
+
+train4 %>% head()
+```
+
+```{r}
+mtry_grid = data.frame(mtry = seq(1:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train4,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+```{r}
+train5 <-
+  train %>%
+  filter(
+    ANNUAL_MILEAGE <=18000 &
+      ANNUAL_MILEAGE >5000 &
+      SPEEDING_VIOLATIONS <=15 &
+      DUIS <=5 &
+      PAST_ACCIDENTS <=10
+  ) %>%
+  select(-ID,-INCOME,-EDUCATION)
+train5 %>% head()
+```
+
+```{r}
+fit <-
+  caret::train(
+    OUTCOME ~.,
+    data=train5,
+    method="glm"
+  )
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+```
+
+
+```{r}
+mtry_grid = data.frame(mtry = seq(1:10))
+fit <- caret::train(OUTCOME ~ ., 
+                       data = train5,
+                       method='rf',
+                       tuneGrid=mtry_grid,
+                       ntree=100)
+fit
+y_hat <- predict(fit,test)
+confusionMatrix(y_hat,reference = test$OUTCOME)
+
+```
+
+

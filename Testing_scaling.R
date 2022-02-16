@@ -26,7 +26,6 @@ for (i in unique(claims_df$MARRIED)) {
   claims_df$ANNUAL_MILEAGE[
     is.na(claims_df$ANNUAL_MILEAGE)& claims_df$MARRIED == i
     ] <- mu
-
 }
 
 #set Target Variable as factor ----
@@ -61,20 +60,37 @@ claims_scaled <-
 claims_scaled <-
 data.frame(claims_scaled)
 
+#PCA ----
+pca <- prcomp(claims_scaled)
+
+summary(pca)
+
+# data.frame(pca$x[,1:2],type = claims_df$OUTCOME) %>%
+#   ggplot(aes(PC1,PC2,color=type)) +
+#   geom_point()
+#
+# data.frame(type = claims_df$OUTCOME, pca$x[,1:10]) %>%
+#   gather(key = "PC", value = "value", -type) %>%
+#   ggplot(aes(PC, value, fill = type)) +
+#   geom_boxplot()
+
+pca_df <- data.frame(pca$x[,1:17])
+
 #add OUTCOME ----
 claims_scaled <-
   claims_scaled %>%
   bind_cols(OUTCOME=claims_df$OUTCOME)
 
-#Test train Split----
-test_index <- createDataPartition(y = claims_scaled$OUTCOME,
-                                  times = 1, p = 0.2, list = FALSE)
-train <- claims_scaled[-test_index,]
-test <- claims_scaled[test_index,]
 
+#Test train Split----
+test_index <- createDataPartition(y = claims_scaled.rose$OUTCOME,
+                                  times = 1, p = 0.2, list = FALSE)
+train <- claims_scaled.rose[-test_index,]
+test <- claims_scaled.rose[test_index,]
 
 #Balance data with Random Over Sampling
-#train.rose <- ROSE(OUTCOME ~ ., data=train, seed=10403)$data
+train.rose <- ROSE(OUTCOME ~ ., data=train, seed=10403)$data
+train <- train.rose
 
 #Model testing ----
 #C5.0 ----
@@ -174,11 +190,41 @@ fit_c4.5
 y_hat <- predict(fit_c4.5,test)
 confusionMatrix(y_hat,reference = test$OUTCOME)
 
+#XGBtree ----
+fit_xgb <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method='xgbTree')
+
+fit_xgb
+y_hat <- predict(fit_xgb,test)
+confusionMatrix(y_hat,test$OUTCOME)
+
+#SVM ----
+fit_svm <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method='svmPoly')
+
+fit_svm
+y_hat <- predict(fit_svm,test)
+confusionMatrix(y_hat,test$OUTCOME)
+
+#GBM ----
+fit_gbm <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method='gbm')
+
+fit_gbm
+y_hat <- predict(fit_gbm,test)
+confusionMatrix(y_hat,test$OUTCOME)
+
 
 # Model Summary -----
 models <-
   c("GLM", "LDA", "QDA", "kNN","Classification Tree", "Random forest",
-    "Treebag","C4.5","C5","FDA")
+    "Treebag","C4.5","C5","FDA","xgbTree","SVM","GBM")
 accuracy <-
   c(confusionMatrix(predict(fit_glm, test), test$OUTCOME)$overall["Accuracy"],
     confusionMatrix(predict(fit_lda, test), test$OUTCOME)$overall["Accuracy"],
@@ -189,7 +235,11 @@ accuracy <-
     confusionMatrix(predict(fit_tb, test), test$OUTCOME)$overall["Accuracy"],
     confusionMatrix(predict(fit_c4.5, test), test$OUTCOME)$overall["Accuracy"],
     confusionMatrix(predict(fit_c5, test), test$OUTCOME)$overall["Accuracy"],
-    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$overall["Accuracy"]
+    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$overall["Accuracy"],
+    confusionMatrix(predict(fit_xgb, test), test$OUTCOME)$overall["Accuracy"],
+    confusionMatrix(predict(fit_svm, test), test$OUTCOME)$overall["Accuracy"],
+    confusionMatrix(predict(fit_gbm, test), test$OUTCOME)$overall["Accuracy"]
+
   )
 
 sensitivity <-
@@ -202,7 +252,10 @@ sensitivity <-
     confusionMatrix(predict(fit_tb, test), test$OUTCOME)$byClass["Sensitivity"],
     confusionMatrix(predict(fit_c4.5, test), test$OUTCOME)$byClass["Sensitivity"],
     confusionMatrix(predict(fit_c5, test), test$OUTCOME)$byClass["Sensitivity"],
-    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$byClass["Sensitivity"]
+    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$byClass["Sensitivity"],
+    confusionMatrix(predict(fit_xgb, test), test$OUTCOME)$byClass["Sensitivity"],
+    confusionMatrix(predict(fit_svm, test), test$OUTCOME)$byClass["Sensitivity"],
+    confusionMatrix(predict(fit_gbm, test), test$OUTCOME)$byClass["Sensitivity"]
   )
 
 specificity <-
@@ -215,12 +268,61 @@ specificity <-
     confusionMatrix(predict(fit_tb, test), test$OUTCOME)$byClass["Specificity"],
     confusionMatrix(predict(fit_c4.5, test), test$OUTCOME)$byClass["Specificity"],
     confusionMatrix(predict(fit_c5, test), test$OUTCOME)$byClass["Specificity"],
-    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$byClass["Specificity"]
+    confusionMatrix(predict(fit_fda, test), test$OUTCOME)$byClass["Specificity"],
+    confusionMatrix(predict(fit_xgb, test), test$OUTCOME)$byClass["Specificity"],
+    confusionMatrix(predict(fit_svm, test), test$OUTCOME)$byClass["Specificity"],
+    confusionMatrix(predict(fit_gbm, test), test$OUTCOME)$byClass["Specificity"]
   )
 
-Models_scaled <-
+Models_scaled_train.rose <-
   data.frame(Model = models,
              Accuracy = accuracy,
              Specificity = specificity,
              Sensitivity = sensitivity) %>%
   arrange(desc(Accuracy))
+
+
+#XGBtree Optimization ----
+fit_xgb
+
+xgb_optimizer <- function(child){
+grid <-
+  data.frame(
+    nrounds=c(50),
+    max_depth=c(4),
+    eta=c(0.3),
+    gamma=c(1),
+    colsample_bytree=c(0.7),
+    min_child_weight=c(1),
+    subsample=c(1)
+  )
+
+fit_xgb_opt <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method='xgbTree',
+               tuneGrid=grid)
+
+
+y_hat <- predict(fit_xgb_opt,test)
+return(confusionMatrix(predict(fit_xgb_opt, test), test$OUTCOME)$overall["Accuracy"])
+}
+
+lapply(c(10,20), xgb_optimizer)
+
+
+
+#modelling filling in na ----
+model_na <- caret::train(ANNUAL_MILEAGE ~ ., data=na.omit(claims_df),method='knn',
+                         tuneGrid=data.frame(k=seq(41,91,2))
+                         )
+plot(model_na)
+y_mileage <- predict(model_na,claims_df)
+
+claims_df <-
+claims_df %>%
+  bind_cols(y_pred=y_mileage) %>%
+  mutate(ANNUAL_MILEAGE=
+           ifelse(is.na(ANNUAL_MILEAGE),round(y_pred,0),ANNUAL_MILEAGE))
+  select(-y_pred)
+

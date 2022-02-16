@@ -1,12 +1,16 @@
 ---
-title: "Report"
+title: "Machine Learning for Predicting Motor Insurance Outcome"
 author: "Nick Aristidou"
-date: "05/10/2021"
+date: "10/01/2022"
 output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE,set.seed(1))
+knitr::opts_chunk$set(fig.align = 'center', fig.width=15, fig.height=8,
+                      knitr.table.format = "latex", fig.pos = "!ht",
+                      out.extra = "", out.width = "90%",
+                      set.seed(10403), options(digits = 2))
+
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
@@ -17,6 +21,8 @@ if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.
 if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
 if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
 if(!require(Amelia)) install.packages("Amelia", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+
 
 library(tidyverse)
 library(caret)
@@ -28,60 +34,59 @@ library(dplyr)
 library(ggplot2)
 library(janitor)
 library(Amelia)
+library(testit)
 ```
-
-#Claims Classification Report
-
-## Aim use machine learning to classify if a policy will have a claim (1) or not (0)
-Data has been obtained from kaggle: "https://www.kaggle.com/sagnik1511/car-insurance-data"
 
 ## Abstract
+In this study, machine learning models have been applied to a motor insurance dataset to predict if a policy has had a claim or not. The target attribute, outcome, is a binary classification problem where the data displays a 70:30 class imbalance in favor of the no claim (0) class. Accuracy, sensitivity and specificity have been used to evaluate the models predictive performance to ensure that the best model for identifying the minor class is selected. The study finds that an optimally tuned xgbTree model yields the best results, with an accuracy of 86%, a sensitivity of 90% and a specificity of 77%.
+
+## Introduction
+This research capstone project aims to explore the use of machine learning in predicting the Outcome of an insurance policy. The data used herein was obtained from kaggle, "https://www.kaggle.com/sagnik1511/car-insurance-data", and compiles motor insurance policy information, such as gender, age, vehicle type and more. Additionally, the data contains information on if the policy has had a claim or not, this is noted as the target field, Outcome, and is a binary field where 0 indicates a policy is claim free whilst a 1 shows the policy has had a claim. The project will first explore the data and note correlations between the variables and the target and then will explore the use of a number of machine learning algorithms with the aim of predicting if a policy has had a claim or not. The models explored will aim to solve the binary classification problem and will be compared using accuracy, sensitivity and specificity, A. Kumar (2018). The best model will be optimized using grid search cross validation to determine the best combination of hyperparameters.
+
+Accuracy measures the number of correct predicted samples over the total number of samples. 
+ 
+$Accuracy = \frac{\text{no correct predictions}}{\text{no total predictions}}$
+ 
+Sensitivity is a measure for identifying how well the model identifies all the samples in a given class. It is defined as the number of True Positives over the sum of the True Positive and False Negatives.
+ 
+$Sensitivity = \frac{TP}{TP + FN}$
+ 
+Specificity, also known as the true negative rate, is the measure of the proportion of actual negatives that are correctly identified. 
+ 
+$Specificity = \frac{TN}{TN + FP}$
+
+These latter metrics are important for evaluating models, especially under the circumstances that the data used exhibits a class imbalance. Here the data shows an approximately 70:30 split for the outcomes 0:1. 
 
 ## Exploratory Data Analysis
-
-```{r load_data}
+The first step is to load in the data from the csv file exported from kaggle and inspect the dataframe. The str() function has been employed achieve this and shows that there ar 19 variables and 10,000 rows contained in the data and displays the data types:
+```{r inspect_columns, echo=FALSE}
 claims_df <- read.csv("data/Car_Insurance_Claim.csv")
-```
-
-```{r inspect_data}
-claims_df %>% head()
-```
-
-```{r inspect_columns}
 str(claims_df)
 ```
 
-Check for duplicates and NA's:
-```{r data_check}
-claims_df %>%
-  janitor::get_dupes()
-
-claims_df[!complete.cases(claims_df), ]
-
-Amelia::missmap(claims_df)
-```
-No duplicates but have NA values in CREDIT_SCORE and ANNUAL_MILAGE. Will fix these in Numerical investigation section.
-
-```{r}
-ggplot(gather(claims_df), aes(value)) + 
-    geom_histogram(stat = "count") + 
-    facet_wrap(~key, scales = 'free_x')
+Next the data is examined for duplicates, which as shown below is not an issue where the get_dupes() function returns an empty tibble. Otherwise, duplicates would need to be removed as these could influence the models and it may allow them to have seen the data before.
+```{r data_check, echo=FALSE, message=FALSE}
+janitor::get_dupes(dat = claims_df)
 ```
 
-
+More over the data is explored for missing values and the heatmap displayed below shows that the two variables CREDIT_SCORE and ANNUAL_MILEAGE are sparsely populated. These missing values will be delt with in the following data preparation section. 
+```{r data_missing,echo=FALSE}
+Amelia::missmap(claims_df,
+                main = "Missing Data Heatmap",
+                margins=c(9,5))
+```
 
 ### Investigate Spread of Target Variable
 
-Target variable is outcome:
-```{r check_target_var_distribution}
-prop.table(table(claims_df$OUTCOME))
+Of the 19 attributes the target class is Outcome and the rest of the features will be used as predictors in the models. Class balance, is examined below and shows the ratio of the binary outcomes 0 and 1. From this it is noted that the data is imbalanced in favor of policies with no claim. The skew is roughly a 70:30 split, and this may cause the models to have a poor predictive performance especially for the minor class, as models were designed to around the assumption of an equal distribution of classes. In these situations a model can have a high accuracy just by default guessing a policy wont have a claim. This also posses a problem as typically the minor class is more important. An insurance company would want to know if a policy is going to have claim so the right premium can be charged for the risk and therefore having good predictive performance for the minor class is important. This means that for evaluating the models, accuracy alone will not be sufficient and consideration of specificity and sensitivity are required.  
+
+```{r check_target_var_distribution,echo=FALSE}
+data.frame(prop.table(table(claims_df$OUTCOME))) %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
 ```
 
-Data is imbalanced to favour policies with no claim. This may lead to our models favouring no claim when implementing machine learning on this data set.
-In turn this may causes issues when trying to evaluate the success of the models using accuracy.
-Almost 70% of the policies have not had a claim.
-
-```{r chart_target_var}
+```{r chart_target_var, echo=FALSE}
 claims_df %>%
   mutate(OUTCOME=as.factor(OUTCOME)) %>%
   ggplot(aes(OUTCOME)) +
@@ -90,457 +95,606 @@ claims_df %>%
   xlab("Claim Outcome")
 ```
 
-Fix data so that target variable is factor:
-```{r set_TV_factor}
+The Outcome attribute also needs to be converted into a factor, before the models are applied.
+```{r set_TV_factor,echo=TRUE}
 claims_df <-
   claims_df %>% 
   mutate(OUTCOME=as.factor(OUTCOME))
 ```
 
+### Explore Numerical Attributes
+The attributes that have been loaded in as numerical are shown below in the subset of the data. 
 
-### Explore Numerical Features
-```{r numerical_features_tbl}
+```{r numerical_features_tbl,echo=FALSE}
 claims_df %>% 
   select_if(is.numeric) %>%
-  head()
+  head() %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position","scale_down"))
 ```
-
-```{r credit_score}
-claims_df %>% 
+The first numerical field to be examined is the CREDIT_SCORE variable and the density plot below shows that this field has two distinct peaks when split by Outcome. As shown policies with a higher credit score are more likely to be claim free.
+```{r credit_score,echo=FALSE,message=FALSE,warning=FALSE}
+suppressWarnings(claims_df %>% 
   ggplot(aes(CREDIT_SCORE,colour=OUTCOME,fill=OUTCOME)) +
   geom_density(alpha=0.5) +
   xlab("Credit Score") +
-  ylab("Density")
+  ylab("Density"))
 ```
-We also observe that CREDIT_SCORE is related to the INCOME field and will use this to help fill in NAs
-
-```{r}
-claims_df %>% 
+It is also noted that credit score is related to the Income Attribute and this will be used to help fill in missing values in the credit score attribute.
+```{r cs_vs_income,echo=FALSE,message=FALSE,warning=FALSE}
+suppressWarnings(claims_df %>% 
   ggplot(aes(CREDIT_SCORE,colour=INCOME,fill=INCOME)) +
   geom_density(alpha=0.5) +
   xlab("Credit Score") +
-  ylab("Density")
+  ylab("Density"))
 ```
 
+Annual mileage shows the trend that as the distance increases a policy is more likely to have a claim. It is noted that annual mileage correlates to the Mrried attribute, where those policies with a married classification have lower mileage.
 
+```{r annual_mileage,echo=FALSE,message=FALSE,warning=FALSE}
+suppressWarnings(claims_df %>% 
+  ggplot(aes(ANNUAL_MILEAGE,colour=OUTCOME,fill=OUTCOME)) +
+  geom_density(alpha=0.5) +
+  xlab("Annual Mileage") +
+  ylab("Density"))
+```
 
-```{r fixing_Credit_score}
+```{r annual_mileage_married,echo=FALSE,message=FALSE,warning=FALSE}
+suppressWarnings(claims_df %>%
+  mutate(MARRIED=as.factor(MARRIED)) %>%
+  ggplot(aes(ANNUAL_MILEAGE,colour=MARRIED,fill=MARRIED)) +
+  geom_density(alpha=0.5) +
+  xlab("Annual Mileage") +
+  ylab("Density"))
+```
+
+```{r numerical_plots, echo=FALSE}
+charts_num <- list()
+for(i in c("DUIS","SPEEDING_VIOLATIONS","PAST_ACCIDENTS")){
+  charts_num[[i]] <- 
+    claims_df %>%
+      ggplot(aes(.data[[i]],fill=OUTCOME))+
+      geom_bar(position = 'dodge') +
+      ylab("Count of Policies") +
+      xlab(i)
+  
+}
+
+gridExtra::grid.arrange(grobs = charts_num)
+```
+
+All other values that have been set as numeric upon loading the data actually appear to be factors and will be explored in the following Categorical Variables section
+
+### Explore Categorical Attributes
+All categorical variables are plotted as a function of the number of policies and split by the target attribute Outcome. A few observations to note, the data is heavily skewed to sedans, which are more likely to be claim free. Age correlates to the probability of a policy having a claims, were as expected older and therefore likely more experienced drivers are less likely to have a claim. Males are more likely to have a claim than females. Very few policies are associated with the minor race category and therefore will yield little difference on the outcome as predicting factor. Those with no education are more likely to have a claim than those who have some level of education. Likewise lower income levels are more likely to have an outcome of 1, relative to those that are in the middle class or upper class bracket.
+
+```{r category_grid, echo=FALSE,fig.width=15}
+charts <- list()
+for(i in c("VEHICLE_TYPE","AGE","GENDER","RACE","DRIVING_EXPERIENCE","EDUCATION","INCOME","MARRIED","CHILDREN","VEHICLE_OWNERSHIP")){
+  charts[[i]] <- 
+    claims_df %>%
+      ggplot(aes(.data[[i]],fill=OUTCOME))+
+      geom_bar(position = 'dodge') +
+      ylab("Count of Policies") +
+      xlab(i)
+  
+}
+gridExtra::grid.arrange(grobs = charts)
+```
+
+### Data Preperation
+As noted previously, the two variables CREDIT_SCORE and ANNUAL_MILEAGE have a number of missing entries, ca. 1000 rows each. One method to handle this would be to drop these rows, however doing so causes the class imbalance to very slightly deteriorate further. Consequently, the aim is to retain these rows so that as much information is kept as possible to train the models on.
+
+For credit score, it was observed that the variable was correlated to income and so to populate the missing blanks the average value of the credit score as a function of income is used.
+
+```{r cs_missing_values,echo=TRUE}
 for (i in unique(claims_df$INCOME)) {
   mu <- claims_df %>%
     filter(INCOME == i) %>%
     pull(CREDIT_SCORE) %>%
     mean(.,na.rm=T)
-  
-  claims_df$CREDIT_SCORE[is.na(claims_df$CREDIT_SCORE) & claims_df$INCOME == i] <- mu
+
+  claims_df$CREDIT_SCORE[
+    is.na(claims_df$CREDIT_SCORE) & claims_df$INCOME == i
+    ] <- mu
 }
 ```
 
+Whilst for annual mileage, the average value of the dataset is used to populate the missing values.
 
-Investigate ANNUAL_MILEAGE
-```{r annual_mileage}
-claims_df %>% 
-  ggplot(aes(ANNUAL_MILEAGE,colour=OUTCOME,fill=OUTCOME)) +
-  geom_density(alpha=0.5) +
-  xlab("Annual Mileage") +
-  ylab("Density")
-```
-It is noted that the ANNUAL_MILEAGE variable shows little to no correlation with other variables in the data set and therefore, for simplicity and to retain as much data as possible the NA values will be replaced with the overall average of the data. 
-```{r fixing_annual_mileage_na}
-claims_df %>% 
-  ggplot(aes(ANNUAL_MILEAGE,colour=GENDER,fill=GENDER)) +
-  geom_density(alpha=0.5) +
-  xlab("Annual Mileage") +
-  ylab("Density")
+```{r missing_values2, echo=TRUE}
+claims_df$ANNUAL_MILEAGE[is.na(claims_df$ANNUAL_MILEAGE)] <-
+  mean(claims_df$ANNUAL_MILEAGE,na.rm=T)
 ```
 
-
-```{r fixing_annual_mileage_na_2}
-mu <-
+The ID column is removed as this is a unique feature to every policy and is not required as a predictive attribute.
+```{r remove_id, echo=TRUE}
+claims_df <-
   claims_df %>%
-  pull(ANNUAL_MILEAGE) %>% mean(.,na.rm=T)
-
-claims_df$ANNUAL_MILEAGE[is.na(claims_df$ANNUAL_MILEAGE)] <- mu
+  select(-ID) 
 ```
 
-
-All other values that have been set as numeric appear to be factors and will be explored with Categorical Variables
-```{r Vehicle_type}
-claims_df %>%
-  ggplot(aes(VEHICLE_TYPE,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Vehicle Type")
-```
-
-
-
-```{r AGE}
-claims_df %>%
-  ggplot(aes(AGE,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Age Group")
-```
-
-```{r Gender}
-claims_df %>%
-  ggplot(aes(GENDER,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Gender")
-```
-
-```{r RACE}
-claims_df %>%
-  ggplot(aes(RACE,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Race")
-```
-
-```{r DRIVING_EXP}
-claims_df %>%
-  ggplot(aes(DRIVING_EXPERIENCE,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Experience")
-```
-
-```{r Education}
-claims_df %>%
-  ggplot(aes(EDUCATION,fill=OUTCOME))+
-  geom_bar(position = 'dodge') +
-  ylab("Count of Policies") +
-  xlab("Education")
-```
-
-#Modelling
-##Create test and train data
-
-```{r test_train}
+The data can be randomly split the data into a training set and a test set using the caret createDataPartition function to generate an 80:20 train:test split
+```{r test_train, echo=TRUE}
 test_index <- createDataPartition(y = claims_df$OUTCOME, times = 1, p = 0.2, list = FALSE)
 train <- claims_df[-test_index,]
 test <- claims_df[test_index,]
 ```
-
-```{r dim_check_train}
-dim(train)
+ 
+The train data has `r dim(train)[0]` rows vs the test data set which has `r dim(test)[0]` showing that the 80:20 split has been achieved. Additionally both the train and test data sets have retained a very similar class imbalance.
+ 
+Train class balance:
+```{r train_class_balance,echo=FALSE}
+data.frame(prop.table(table(na.omit(train)$OUTCOME))) %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
 ```
+ 
+ 
+ 
+Test class balance:
 
-Logistic Regression
-```{r glm}
+<p>&nbsp;</p>
+
+```{r test_class_balance,echo=FALSE}
+data.frame(prop.table(table(na.omit(test)$OUTCOME)))%>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+ 
+<p>&nbsp;</p>  
+  
+## Applying Models
+Now that the data is prepared, the classification models can be applied to the train data set with the aim of predicting the outcome attribute. It is worth noting the following code to train all the models takes a reasonable amount of time to run. 
+```{r fit_models, echo =TRUE, message=FALSE}
+#XGBtree ----
+fit_xgb <-
+  caret::train(OUTCOME ~ .,
+               data=train,
+               method='xgbTree')
+
+#GLM ----
 fit_glm <-
   caret::train(OUTCOME ~ .,
                data=train,
                method="glm")
 
-y_hat <- predict(fit_glm,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-```{r LDA}
+#LDA ----
 fit_lda <-
   caret::train(OUTCOME ~ .,
                data=train,
                method="lda")
 
-y_hat <- predict(fit_lda,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-QDA
-```{r qda}
+#QDA ----
 fit_qda <-
   caret::train(OUTCOME ~ .,
                data=train,
                method="qda")
 
-y_hat <- predict(fit_qda,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-
-
-```{r knn}
+#kNN ----
 fit_knn <-
   caret::train(OUTCOME ~ .,
                data=train,
                method="knn",
-               tuneGrid=data.frame(k=seq(25,100,2)),
-               trControl = trainControl(method = "cv", number = 10))
+               tuneGrid=data.frame(k=seq(1,16,2)),
+               trControl = trainControl(method = "cv",
+                                        number = 10))
 
-y_hat <- predict(fit_knn,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-plot(fit_knn)
-```
-
-```{r classification_tree}
-cp_grid <- data.frame(cp=seq(0, 0.05, 0.002))
+#Classification Tree ----
+cp_grid <- data.frame(cp=seq(0, 0.03, 0.002))
 fit_ct <- caret::train(OUTCOME ~ .,
                        data = train,
                        method="rpart",
                        tuneGrid = cp_grid)
-fit_ct$results
 
-plot(fit_ct)
-
-cp_grid[which.max(fit_ct$results$Accuracy),]
-
-y_hat <- predict(fit_ct,test)
-
-confusionMatrix(y_hat,reference = test$OUTCOME)
-
-plot(fit_ct$finalModel, margin = 0.1)
-text(fit_ct$finalModel, cex = 0.75)
-```
-
-
-Random forest
-```{r Random_forest}
+#Random Forest ----
 mtry_grid = data.frame(mtry = seq(1,7,2))
-fit_rf <- caret::train(OUTCOME ~ ., 
+fit_rf <- caret::train(OUTCOME ~ .,
                        data = train,
                        method='rf',
                        tuneGrid=mtry_grid,
                        ntree=100)
-fit_rf$results
-plot(fit_rf)
 
-y_hat <- predict(fit_rf,test)
-
-confusionMatrix(y_hat,test$OUTCOME)
-
-imp <- varImp(fit_rf)
-imp
-```
-```{r}
-md_grid <- data.frame(maxdepth=seq(1, 12, 1))
-fit_rf2 <- caret::train(OUTCOME ~ .,
-                       data = train,
-                       method="rpart2",
-                       tuneGrid = md_grid)
-
-y_hat <- predict(fit_rf2,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-plot(fit_rf2)
-```
-
-```{r treebag}
+#treebag ----
 fit_tb <-
   caret::train(OUTCOME ~ .,
                data=train,
                method="treebag")
 
-y_hat <- predict(fit_tb,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
+#C4.5 ----
+fit_c4.5 <- caret::train(OUTCOME ~ .,
+                         data = train,
+                         method='J48')
+
+#C5 ----
+fit_c5 <- caret::train(OUTCOME ~ .,
+                       data = train,
+                       method='C5.0')
+#FDA ----
+fit_fda <- caret::train(OUTCOME ~ .,
+                       data = train,
+                       method='fda')
 ```
 
+### Model Performance Summary
+Having fitted the models to the data the models are used to predict the Outcome attribute for the test set. The results of which are then used against the actual value to return the models accuracy, sensitivity and specificity. The results are displayed in the table below and have been ordered by accuracy (highest to lowest).
 
+```{r model_results, echo=FALSE, warning=FALSE}
+# Model Summary -----
+models <-
+  c("GLM", "LDA", "QDA", "kNN","Classification Tree", "Random forest",
+    "Treebag","C4.5","C5","FDA","xgbTree")
 
-##Model Summaries
-```{r}
-models <- c("GLM", "LDA", "QDA", "kNN","Classification Tree", "Random forest", "Classifcation Tree 2","Treebag","LDA 2")
-accuracy <- c(confusionMatrix(predict(fit_glm, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_lda, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_qda, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_knn, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_ct, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_rf, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_rf2, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_tb, test), test$OUTCOME)$overall["Accuracy"],
-              confusionMatrix(predict(fit_lda2, test), test$OUTCOME)$overall["Accuracy"]
-              )
-data.frame(Model = models, Accuracy = accuracy) %>% arrange(desc(Accuracy))
+model_name <-
+  list(fit_glm, fit_lda, fit_qda, fit_knn,fit_ct, fit_rf,
+    fit_tb,fit_c4.5,fit_c5,fit_fda,fit_xgb)
+
+accuracy <- list()
+sensitivity <- list()
+specificity <- list()
+index <-0
+for (i in model_name){
+    index <- index + 1
+    accuracy[[index]] <-confusionMatrix(predict(i, test), test$OUTCOME)$overall["Accuracy"]
+    sensitivity[[index]] <-confusionMatrix(predict(i, test), test$OUTCOME)$byClass["Sensitivity"]
+    specificity[[index]] <-confusionMatrix(predict(i, test), test$OUTCOME)$byClass["Specificity"]
+}
+
+model_summary <-
+data.frame(Model = models,
+           Accuracy = unlist(accuracy),
+           Specificity = unlist(specificity),
+           Sensitivity = unlist(sensitivity)) 
+
+model_summary <-
+  model_summary %>%
+  mutate(Mean = rowMeans(select(model_summary, is.numeric), na.rm = TRUE)) %>%
+  arrange(desc(Mean)) %>%
+  select(-Mean)
+
+model_summary %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+From this initial result, it can be seen that the best performing model taking into account all three metrics is the xgbTree model. This not only has the one of the highest accuracies of 85%, but has the highest combination of sensitivity, 90%, and specificity, 75%. Consequently, this model is the best at correctly predicting the outcome variable and on the whole handles both the minor class (1) and major class (0) better than any other model. This is demonstrated in the figure below, which plots out the heatmap for the confusion matrix of the xgbTree model and shows how it identified the policies outcome (Prediction) relative to the actual (Reference) classification. 
+
+```{r cm_heatmap, echo=FALSE}
+confusion_matrix_plot <- function(model){
+  table <- data.frame(confusionMatrix(predict(model, test), test$OUTCOME)$table)
+
+plotTable <- table %>%
+  mutate(Classification = ifelse(table$Prediction == table$Reference, "Correct", "Incorrect")) %>%
+  group_by(Reference) %>%
+  mutate(prop = Freq/sum(Freq))
+
+ggplot(data = plotTable, mapping = aes(x = Reference, y = Prediction, fill = Classification, alpha = prop)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), vjust = .5, fontface  = "bold", alpha = 1) +
+  scale_fill_manual(values = c(Correct = "green", Incorrect = "red")) +
+  theme_bw() +
+  xlim(rev(levels(table$Reference)))
+}
+
+confusion_matrix_plot(fit_xgb)
 ```
 
+## Model Optimisation
+Having identified the xgbTree model as the best classifier for predicting the Outcome, the model hyperparameters will be optimised to further improve the predictive performance of the model. To achieve this a tuning grid to search across the hyperparameter space is set up and three fold cross validation is employed to determine the best possible combination of the values explored. To start the tuning protocol suggestions were taken from O. Zhang (2015).
 
-##Ensemable
-```{r}
-# y_models <-
-#  bind_cols(
-#   y_glm = predict(fit_glm,test),
-#   y_lda = predict(fit_lda,test),
-#   y_qda = predict(fit_qda,test),
-#   y_ct = predict(fit_ct,test),
-#   y_rf = predict(fit_rf,test)
-# )
-
-y_models <-
- bind_cols(
-  y_glm = predict(fit_glm,test),
-  y_c4.5 =predict(fit_c4.5,test),
-  y_c5 =predict(fit_c5,test),
-  y_rf =predict(fit_rf,test),
-  y_ct =predict(fit_ct,test),
-  y_tb =predict(fit_tb,test)
+### Number of iterations and learning rate
+In the first instance, the dominant feature of the maximum number of trees, max_depth, is examined in combination with the learning rate, eta. The tuning grid is set up as per the below code and the model is trained and the resulting best parameters are displayed in the following table.
+```{r xgb_tuning, echo=TRUE}
+tune_grid <- expand.grid(
+  nrounds = seq(from = 100, to = 1000, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 5, 6, 8),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
 )
 
-ensamble_pred <-
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 3, # with n folds
+  verboseIter = FALSE, # no training log
+  allowParallel = TRUE
+)
+
+xgb_tune <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+```
+
+
+```{r best_tune1,echo=FALSE}
+xgb_tune$bestTune %>% 
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+The function below has been created to help visualize the tuning process as a function of the learning rate and will be recycled through the optimization process. The first tuning process is visualized below from this function:
+```{r tunplot_1, echo=TRUE}
+tuneplot <- function(x, probs = .95) {
+  ggplot(x) +
+    coord_cartesian(ylim = c(min(x$results$Accuracy),
+                             quantile(x$results$Accuracy,
+                                      probs = probs))
+                    ) +
+    theme_bw()
+}
+
+tuneplot(xgb_tune)
+```
+From the plots it can be confirmed that the best set of parameters, as per the accuracy measurement, are achieved from a max tree depth of `r xgb_tune$bestTune$max_depth` and a learning rate of `r xgb_tune$bestTune$eta`
+
+### Minimum child weight
+Now the hyperparameter, minimum child weight, is explored whilst fixing the learning rate and allowing a tolerance around the number of trees of +/- 1 (or +/- 2 if max_depth =2) for experimentation:
+
+```{r tuning_2, echo=TRUE}
+tune_grid2 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = ifelse(xgb_tune$bestTune$max_depth == 2,
+    c(xgb_tune$bestTune$max_depth:4),
+    xgb_tune$bestTune$max_depth - 1:xgb_tune$bestTune$max_depth + 1),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(1, 2, 3),
+  subsample = 1
+)
+
+xgb_tune2 <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = tune_control,
+  tuneGrid = tune_grid2,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+tuneplot(xgb_tune2,0.995)
+```
+
+```{r best_tune_2, echo=FALSE}
+xgb_tune2$bestTune %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+The second tuning run, shows very little difference between the minimum child weights but the highest accuracy was achieved using `r xgb_tune2$bestTune$min_child_weight`. 
+
+### Coulmn and row sampling
+From the previous two steps the max depth is now fixed along with the eta and min child weight, whilst the different values for row and column sampling are explored.
+```{r tuning_3, echo=TRUE}
+tune_grid3 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = c(0.5, 0.75, 1.0)
+)
+
+xgb_tune3 <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = tune_control,
+  tuneGrid = tune_grid3,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+tuneplot(xgb_tune3, probs = .975)
+```
+
+```{r best_tune_3, echo=FALSE}
+xgb_tune3$bestTune %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+
+Again very little improvement is seen through tuning these values, as noted by the similarity in the profiles of all the data points. However, the optimal values for these will be st from the tuning process as `r xgb_tune3$bestTune$colsample_bytree` and `r xgb_tune3$bestTune$subsample`, for column and row sampling respectively. 
+
+### Gamma
+As before the previous tuning parameters are set to the optimal values and the gamma term is now explored to observe the impact on model performance.
+```{r tuning_4, echo=TRUE}
+tune_grid4 <- expand.grid(
+  nrounds = seq(from = 100, to = 1000, by = 50),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = c(0, 0.05, 0.1, 0.5, 0.8, 1.0),
+  colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = xgb_tune3$bestTune$subsample
+)
+
+xgb_tune4 <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = tune_control,
+  tuneGrid = tune_grid4,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+tuneplot(xgb_tune4,0.995)
+```
+
+```{r best_tune_4, echo=FALSE}
+xgb_tune4$bestTune %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+
+From inspection of the results the optimal gamma is found to be, `r xgb_tune4$bestTune$gamma`. Although it is noted that again very little difference in performance is noted between the values examined. 
+
+### Reducing learning rate 
+Now that all the hyperparameters have been tuned, the learning rate is reduced.
+```{r tuning_5, echo=TRUE}
+tune_grid5 <- expand.grid(
+  nrounds = seq(from = 100, to = 10000, by = 100),
+  eta = c(0.01, 0.015, 0.025, 0.05, 0.1),
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = xgb_tune4$bestTune$gamma,
+  colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = xgb_tune3$bestTune$subsample
+)
+
+
+xgb_tune5 <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = tune_control,
+  tuneGrid = tune_grid5,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+tuneplot(xgb_tune5,0.995)
+```
+
+```{r best_tune_5, echo=FALSE}
+xgb_tune5$bestTune %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+### Fitting and evaluating final model
+All parameters have been optimized and are now set in a final parameter grid and the new model is trained and tested on the data.
+```{r final_tune,echo=TRUE}
+final_grid <- expand.grid(
+  nrounds = xgb_tune5$bestTune$nrounds,
+  eta = xgb_tune5$bestTune$eta,
+  max_depth = xgb_tune5$bestTune$max_depth,
+  gamma = xgb_tune5$bestTune$gamma,
+  colsample_bytree = xgb_tune5$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune5$bestTune$min_child_weight,
+  subsample = xgb_tune5$bestTune$subsample
+)
+
+train_control <- caret::trainControl(
+  method = "none",
+  verboseIter = FALSE,
+  allowParallel = TRUE 
+)
+
+xgb_model <- caret::train(
+  OUTCOME ~ .,
+  data=train,
+  trControl = train_control,
+  tuneGrid = final_grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+```
+
+```{r final_tune_summary,echo=FALSE}
+model_summary <-
+  model_summary %>%
+  rbind(tibble(Model="Tuned xgbTree",
+        Accuracy =confusionMatrix(predict(xgb_model, test), test$OUTCOME)$overall["Accuracy"],
+        Sensitivity = confusionMatrix(predict(xgb_model, test), test$OUTCOME)$byClass["Sensitivity"],
+        Specificity = confusionMatrix(predict(xgb_model, test), test$OUTCOME)$byClass["Specificity"])
+        ) 
+
+model_summary <-
+  model_summary %>%
+  mutate(Mean = rowMeans(select(model_summary, is.numeric), na.rm = TRUE)) %>%
+  arrange(desc(Mean)) %>%
+  select(-Mean)
+
+model_summary %>%
+  kbl(.,booktabs = T) %>% 
+  kable_styling(latex_options = c("striped","hold_position"))
+```
+
+The new tuned model performs slightly better in terms of specificity and therefore correctly identifies more of the policies that have an outcome of one. This is shown in the confusion matrix heatmap shown below that shows out of the 2001 policies the model correctly predicts 481 policies with an outcome of one relative to the un-tuned model that predicted 469 correctly (2.5% improvement). Although this is a small enhancement, for the problem at hand this makes the model better as an insurance company will want to more accurately identify policies with an outcome of 1, as these are the policies that are going to cause the company to experience losses and need to be priced accordingly.  
+
+```{r cm_heatmap2, echo=FALSE}
+confusion_matrix_plot(xgb_model)
+```
+
+## Ensemble 
+Another technique to enhance model prediction performance is to ensemble models together and combine the predictive power of a collection of models. This technique is explored below using a combination of the models. It is noted that an exhaustive search of all possible permutations was not conducted and there may be a combination that would lead to better predictive performance. However, the model proposed below yielded impressive accuracy, 85%, along with a high specificity 74% and sensitivity of 90%. 
+```{r ensemble, echo=TRUE}
+y_models <-
+  bind_cols(
+    y_glm = predict(fit_glm,test),
+    y_lda = predict(fit_lda,test),
+    y_fda = predict(fit_fda,test),
+    y_qda = predict(fit_qda,test),
+    y_c5 = predict(fit_c5,test),
+    y_ct = predict(fit_ct,test),
+    y_xgb = predict(xgb_model,test)
+  )
+
+ensemble_pred <-
   y_models %>%
   mutate_all(as.numeric) %>%
   rowMeans()
 
-ensamble_pred <-
-  ifelse(ensamble_pred > 1.5, 1,0)
-
-confusionMatrix(factor(ensamble_pred),test$OUTCOME)
+ensemble_pred <-
+  ifelse(ensemble_pred > 1.5, 1,0)
 ```
 
+```{r ensemble_summary, echo=FALSE}
+model_summary <-
+  model_summary %>%
+  rbind(tibble(Model="Ensemble Model",
+        Accuracy =confusionMatrix(factor(ensemble_pred), test$OUTCOME)$overall["Accuracy"],
+        Sensitivity = confusionMatrix(factor(ensemble_pred), test$OUTCOME)$byClass["Sensitivity"],
+        Specificity = confusionMatrix(factor(ensemble_pred), test$OUTCOME)$byClass["Specificity"])
+        ) 
 
-##Over-sampling
-Can over-sampling combat the imbalance:
-```{r}
-train2 <-
-  train %>%
-  bind_rows(train %>%
-  filter(OUTCOME==1))
+model_summary <-
+  model_summary %>%
+  mutate(Mean = rowMeans(select(model_summary, is.numeric), na.rm = TRUE)) %>%
+  arrange(desc(Mean)) %>%
+  select(-Mean)
 
-prop.table(table(train2$OUTCOME))
+model_summary %>%
+  kbl(.,booktabs = T) %>%
+  kable_styling(latex_options = c("striped","hold_position"))
 ```
 
-#Impact on previous models
-```{r}
-cp_grid <- data.frame(cp=seq(0, 0.05, 0.002))
-fit <- caret::train(OUTCOME ~ .,
-                       data = train2,
-                       method="rpart",
-                       tuneGrid = cp_grid)
+Once more the confusion matrix heatmap is generated for the ensemble model and shows that model does well compared to all other models in terms of its ability to correctly identify the outcome attribute of 1. 
+```{r cm_heatmap3, echo=FALSE}
+table <- data.frame(confusionMatrix(factor(ensemble_pred),test$OUTCOME)$table)
 
-plot(fit)
+plotTable <- table %>%
+  mutate(Classification = ifelse(table$Prediction == table$Reference, "Correct", "Incorrect")) %>%
+  group_by(Reference) %>%
+  mutate(prop = Freq/sum(Freq))
 
-y_hat <- predict(fit,test)
-
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-##Under-sampling test
-
-```{r}
-id_list <- 
-  c(which(train$OUTCOME=="0")[1:length(which(train$OUTCOME=="1"))],which(train$OUTCOME=="1"))
-
-train3 <-
-  train[id_list,]
-prop.table(table(train3$OUTCOME))
+ggplot(data = plotTable, mapping = aes(x = Reference, y = Prediction, fill = Classification, alpha = prop)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), vjust = .5, fontface  = "bold", alpha = 1) +
+  scale_fill_manual(values = c(Correct = "green", Incorrect = "red")) +
+  theme_bw() +
+  xlim(rev(levels(table$Reference)))
 ```
 
+## Conclusion
+In conclusion, the xgbTree model with tuned hyperparamters delivered the best predictive performance of the outcome attribute from the motor insurance data set. The model achieved a binary classification accuracy of 86%, a sensitivity of 90% and a specificity of 77%. Initially the data was explored to show how the features of the data related to the target variable outcome, which indicates if a policy has had a claim (1) or not (0). The analysis revealed a number of trends in the data for example as age and driving experience increased the likelihood of a policy having a claim decreased, agreeing with natural intuition. Furthermore, the EDA showed that there were no outliers but there were however two variables with approximately 10% of the data missing as blanks. The credit score attribute was populated using the mean of the column values as a function of a co-variate column providing more detail than just the simple average. Whilst the annual mileage attribute was populated with the average value. It is worth noting this technique may mislead the machine learning models and other approaches could be considered, for example dropping all data with blanks. It could also be worth exploring annual mileage as a function of the married status as this was shown to have an impact on this attribute. In this research the blanks were replaced to maximize the number of data points used and ensure the maximum amount of data showing the minor target class were kept. Importantly the EDA, also highlighted that the data was imbalanced and favored the classes 0:1 in a 70:30 split. Due to this it was important to not only consider accuracy but also specificity when evaluating the predictive performance of the models. In this data knowing the outcome is assigned correctly as class 1 is very important as it is these policies that the modeling needs to find so that adequate insurance pricing measures can be put in place and an equitable and fair premium can be charged to policy holders. In light of this a number of models were searched and the most promising model was taken and tuned for optimal performance. Furthermore, an ensemble model was also created and showed very promising results that were almost equal to the tuned model in isolation. 
 
-```{r}
-mtry_grid = data.frame(mtry = seq(4:10))
-fit <- caret::train(OUTCOME ~ ., 
-                       data = train3,
-                       method='rf',
-                       tuneGrid=mtry_grid,
-                       ntree=100)
+### Future Work 
+The research reported herein has focused on an initial search of a number of machine learning models with the best performing model being optimized and an ensemble model being generated. There are more avenues to explore that may lead to further enhancements in predictive performance, firstly the challenge of the class imbalance could be addressed through the use over random under sampling. Here a random selection of the major class data points are dropped such that class balance is achieved. Alternatively, a new approach to class imbalance is to generate synthetic versions of the minor class using techniques like SMOTE, J. Brownlee (2020). However, more practically in a business case it may be worth collecting more data points so that a balanced set can be achieved. Striving for class balance is likely to help ensure the true model performance is determined and to ensure that policies are correctly identified as having had a claim. 
 
-fit <- caret::train(OUTCOME ~ ., 
-                       data = train3,
-                       method='J48'
-                    )
+Another step may be to investigate the use of group bandings as this has been shown to yield better results for a number of models, a specific example of this technique can be seen in the titanic survivour prediction research, as presented by Ekinci et. al (2018). For example the attribute DUIS could be banded into three groups, 0, 1-3, 3+. Further enhancements to the dataset could also include scaling either through normalization or standardization, A. Bhandari (2020). 
 
+As noted in the ensemble section an exahustive search of all possible combinations was not explored. Hence for further investigation a function to scan all permutations could be devisedsearching for the combination that yields the optimal balance between accuracy, sensitivity and specificty.
 
-y_hat <- predict(fit,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
+Finally further investigation into the impact of populating the missing values in the credit score and annual mileage attributes should be conducted. In the first instance a direct comparison to dropping these data points that contain blanks and populating the just the average value for the column could be explored.
 
-
-
-```{r}
-fit_c4.5 <- caret::train(OUTCOME ~ .,
-                    data = train,
-                    method='J48')
-fit
-y_hat <- predict(fit_c4.5,test)
-
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-```{r}
-fit_c5 <- caret::train(OUTCOME ~ .,
-                    data = train,
-                    method='C5.0')
-fit_c5
-y_hat <- predict(fit_c5,test)
-
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-```{r}
-fit <- caret::train(OUTCOME ~ .,
-                    data = train,
-                    method='xgbDART')
-fit
-y_hat <- predict(fit,test)
-
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-
-## Feature Reduction
-
-```{r}
-train %>% 
-  ggplot(aes(INCOME,fill=OUTCOME)) +
-  geom_bar(position = "dodge")
-```
-
-
-```{r}
-train4 <- train %>%
-  select(-ID,-INCOME,-EDUCATION)
-
-train4 %>% head()
-```
-
-```{r}
-mtry_grid = data.frame(mtry = seq(1:10))
-fit <- caret::train(OUTCOME ~ ., 
-                       data = train4,
-                       method='rf',
-                       tuneGrid=mtry_grid,
-                       ntree=100)
-fit
-y_hat <- predict(fit,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-```{r}
-train5 <-
-  train %>%
-  filter(
-    ANNUAL_MILEAGE <=18000 &
-      ANNUAL_MILEAGE >5000 &
-      SPEEDING_VIOLATIONS <=15 &
-      DUIS <=5 &
-      PAST_ACCIDENTS <=10
-  ) %>%
-  select(-ID,-INCOME,-EDUCATION)
-train5 %>% head()
-```
-
-```{r}
-fit <-
-  caret::train(
-    OUTCOME ~.,
-    data=train5,
-    method="glm"
-  )
-fit
-y_hat <- predict(fit,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-```
-
-
-```{r}
-mtry_grid = data.frame(mtry = seq(1:10))
-fit <- caret::train(OUTCOME ~ ., 
-                       data = train5,
-                       method='rf',
-                       tuneGrid=mtry_grid,
-                       ntree=100)
-fit
-y_hat <- predict(fit,test)
-confusionMatrix(y_hat,reference = test$OUTCOME)
-
-```
-
-
+## References
+1. https://www.kaggle.com/sagnik1511/car-insurance-data
+2. A. Kumar, ML Metrics: Sensitivity vs. Specificity. Available at: https://dzone.com/articles/ml-metrics-sensitivity-vs-specificity-difference, (Accessed on 10 January 2022)
+3. O. Zhang, Tips for data science competitions. Available at: https://www.slideshare.net/OwenZhang2/tips-for-data-science-competitions/14, (Accessed on 12 January 2022)
+4. J. brownlee, SMOTE for Imbalanced Classification with Python. Available at: https://machinelearningmastery.com/smote-oversampling-for-imbalanced-classification/, (Accessed on 14 January 2022)
+5. Ekinci, Ekin & Omurca, Sevinc & Acun, Neytullah. (2018). A Comparative Study on Machine Learning Techniques Using Titanic Dataset. 
+6. A. Bhandari, Feature Scaling for Machine Learning: Understanding the Difference Between Normalization vs. Standardization. Available at: https://www.analyticsvidhya.com/blog/2020/04/feature-scaling-machine-learning-normalization-standardization/, (Accessed on 14 January 2022)
